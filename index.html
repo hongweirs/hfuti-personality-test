@@ -60,6 +60,7 @@
     .score b { display:block; font-size:18px; margin-bottom:4px; }
     .conclusion { margin-top:18px; border-left:5px solid #1d4ed8; background:#f8fafc; padding:16px 18px; border-radius:16px; }
     .warning { display:none; color:#b45309; background:#fffbeb; border:1px solid #fde68a; padding:12px 14px; border-radius:14px; margin-top:14px; line-height:1.7; }
+    .save-status { flex-basis:100%; color:#0f766e; font-size:14px; line-height:1.6; }
     .reset-note { font-size:13px; color:#64748b; text-align:center; margin-top:14px; }
     @media (max-width: 760px) {
       body { padding: 14px 10px 32px; }
@@ -112,7 +113,9 @@
           <div class="conclusion" id="conclusion"></div>
           <div class="actions">
             <button class="secondary" id="backQuizBtn" type="button">返回修改答案</button>
+            <button class="secondary" id="saveLongImageBtn" type="button">保存长图</button>
             <button class="main" id="againBtn" type="button">重新测试</button>
+            <span id="saveStatus" class="save-status" aria-live="polite"></span>
           </div>
         </div>
         <div><img id="resultImg" alt="结果配图" /></div>
@@ -210,6 +213,7 @@
         $('warning').style.display = 'block';
         return;
       }
+      $('saveStatus').textContent = '';
       const scored = scoreQuiz();
       const r = DATA.results.find(x => x.code === scored.code) || DATA.results[0];
       $('resultCode').textContent = r.code;
@@ -231,12 +235,165 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
+    function roundRect(ctx, x, y, w, h, r) {
+      const radius = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + w - radius, y);
+      ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+      ctx.lineTo(x + w, y + h - radius);
+      ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+      ctx.lineTo(x + radius, y + h);
+      ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+    }
+
+    function drawTextBlock(ctx, text, x, y, maxWidth, lineHeight, render) {
+      const chars = Array.from(text || '');
+      let line = '';
+      let cursorY = y;
+      chars.forEach((char) => {
+        const next = line + char;
+        if (line && ctx.measureText(next).width > maxWidth) {
+          if (render) ctx.fillText(line, x, cursorY);
+          cursorY += lineHeight;
+          line = char;
+        } else {
+          line = next;
+        }
+      });
+      if (line) {
+        if (render) ctx.fillText(line, x, cursorY);
+        cursorY += lineHeight;
+      }
+      return cursorY;
+    }
+
+    function loadResultImage() {
+      const img = $('resultImg');
+      if (img.complete && img.naturalWidth) return Promise.resolve(img);
+      return new Promise((resolve, reject) => {
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+      });
+    }
+
+    async function saveLongImage() {
+      const btn = $('saveLongImageBtn');
+      const status = $('saveStatus');
+      btn.disabled = true;
+      status.textContent = '正在生成长图...';
+      try {
+        const img = await loadResultImage();
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const width = 1080;
+        const pad = 64;
+        const contentWidth = width - pad * 2;
+        const title = `${$('resultCode').textContent} ${$('resultName').textContent}`;
+        const label = $('resultLabel').textContent;
+        const tie = $('tieNote').style.display === 'block' ? $('tieNote').textContent : '';
+        const scoreItems = Array.from(document.querySelectorAll('#scores .score')).map(el => el.textContent.trim());
+        const resultParagraphs = Array.from(document.querySelectorAll('#resultText p')).map(p => p.textContent.trim());
+        const conclusionParagraphs = Array.from(document.querySelectorAll('#conclusion p')).map(p => p.textContent.trim());
+        const draw = (render) => {
+          let y = pad;
+          ctx.font = '900 42px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
+          ctx.fillStyle = '#1d4ed8';
+          y = drawTextBlock(ctx, title, pad, y, contentWidth, 54, render) + 14;
+          ctx.font = '800 26px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
+          ctx.fillStyle = '#0f766e';
+          y = drawTextBlock(ctx, label, pad, y, contentWidth, 38, render) + 24;
+          if (tie) {
+            ctx.font = '400 22px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
+            const boxY = y;
+            const textY = y + 36;
+            const endY = drawTextBlock(ctx, tie, pad + 28, textY, contentWidth - 56, 34, false) + 24;
+            if (render) {
+              ctx.fillStyle = '#fffbeb';
+              roundRect(ctx, pad, boxY, contentWidth, endY - boxY, 18);
+              ctx.fill();
+              ctx.strokeStyle = '#fde68a';
+              ctx.stroke();
+              ctx.fillStyle = '#b45309';
+              drawTextBlock(ctx, tie, pad + 28, textY, contentWidth - 56, 34, true);
+            }
+            y = endY + 20;
+          }
+          if (scoreItems.length) {
+            const gap = 14;
+            const scoreW = (contentWidth - gap * 3) / 4;
+            ctx.font = '800 22px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
+            scoreItems.forEach((text, index) => {
+              const x = pad + (scoreW + gap) * index;
+              if (render) {
+                ctx.fillStyle = '#f8fafc';
+                roundRect(ctx, x, y, scoreW, 92, 18);
+                ctx.fill();
+                ctx.strokeStyle = '#e2e8f0';
+                ctx.stroke();
+                ctx.fillStyle = '#1f2937';
+                drawTextBlock(ctx, text, x + 18, y + 34, scoreW - 36, 30, true);
+              }
+            });
+            y += 122;
+          }
+          ctx.font = '400 25px "Microsoft YaHei", "PingFang SC", Arial, sans-serif';
+          ctx.fillStyle = '#1f2937';
+          resultParagraphs.forEach((p) => {
+            y = drawTextBlock(ctx, p, pad, y, contentWidth, 42, render) + 24;
+          });
+          if (conclusionParagraphs.length) {
+            if (render) {
+              ctx.fillStyle = '#1d4ed8';
+              ctx.fillRect(pad, y, 6, 44);
+              ctx.fillStyle = '#1f2937';
+            }
+            y += 12;
+            conclusionParagraphs.forEach((p) => {
+              y = drawTextBlock(ctx, p, pad + 22, y, contentWidth - 22, 42, render) + 24;
+            });
+          }
+          const imgW = contentWidth;
+          const imgH = img.naturalWidth ? imgW * img.naturalHeight / img.naturalWidth : 0;
+          if (render && imgH) {
+            ctx.save();
+            roundRect(ctx, pad, y, imgW, imgH, 28);
+            ctx.clip();
+            ctx.drawImage(img, pad, y, imgW, imgH);
+            ctx.restore();
+          }
+          return y + imgH + pad;
+        };
+        canvas.width = width;
+        canvas.height = Math.ceil(draw(false));
+        ctx.fillStyle = '#f6f7fb';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#ffffff';
+        roundRect(ctx, 28, 28, width - 56, canvas.height - 56, 30);
+        ctx.fill();
+        draw(true);
+        const a = document.createElement('a');
+        a.href = canvas.toDataURL('image/png');
+        a.download = `HFUTI-${$('resultCode').textContent || 'result'}-长图.png`;
+        a.click();
+        status.textContent = '长图已生成，浏览器会开始保存。';
+      } catch (err) {
+        status.textContent = '长图生成失败，请稍后重试。';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     $('prevBtn').addEventListener('click', () => { if (current > 0) { current--; renderQuestion(); } });
     $('nextBtn').addEventListener('click', () => {
       if (current < DATA.questions.length - 1) { current++; renderQuestion(); } else { showResult(); }
     });
     $('restartBtn').addEventListener('click', resetAll);
     $('againBtn').addEventListener('click', resetAll);
+    $('saveLongImageBtn').addEventListener('click', saveLongImage);
     $('backQuizBtn').addEventListener('click', () => { result.style.display='none'; quiz.style.display='block'; renderQuestion(); });
 
     // 不做本地持久化：刷新、重新打开、同设备同 IP 再进入都会从空答案开始。
